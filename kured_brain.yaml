@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+#  creationTimestamp: 2017-12-27T18:36:28Z
+  name: kured-brain
+  namespace: kube-system
+#  resourceVersion: "809965"
+#  uid: d9d1ca5b-eb34-11e7-887b-42010a8002b8
+data:
+  nodes: "tralala1"
+
+  
+  state1.nodes: "1,2,3,4"
+  state1.value: "maintenance"
+  state1.period: "always"
+  state1.scheduled: "no"
+  state1.timeFrame: "0:00 - 07:00 CEST"
+
+  state2: |-
+    state2.nodes="1,2,3,4"
+    state2.value="reboot"
+    state2.period="once"
+    state2.scheduled="no"
+    state1.timeFrame=""

@@ -17,8 +17,8 @@ data:
   state1.timeFrame: "0:00 - 07:00 CEST"
 
   state2: |-
-    state2.nodes="1,2,3,4"
-    state2.value="reboot"
-    state2.period="once"
-    state2.scheduled="no"
-    state1.timeFrame=""
+    nodes=kind-worker2,kind-control-plane
+    value=reboot
+    period=once
+    scheduled=no
+    timeFrame=""

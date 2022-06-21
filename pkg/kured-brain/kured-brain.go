@@ -8,7 +8,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -38,7 +37,7 @@ type State struct {
 }
 
 // parsing configMap values
-func parseConfigMapVals(mapData string) State {
+func ParseConfigMapVals(mapData string) State {
 	state := &State{}
 	for _, row := range strings.Split(mapData, "\n") {
 		splittedRow := strings.Split(row, "=")
@@ -65,7 +64,7 @@ func parseConfigMapVals(mapData string) State {
 	return *state
 }
 
-func packConfigMapVals(state State) (stringState string) {
+func PackConfigMapVals(state State) (stringState string) {
 	var tpl bytes.Buffer
 	tmpl, err := template.New("stateTempl").Parse(stateStrTemplate)
 	if err != nil {
@@ -79,7 +78,7 @@ func packConfigMapVals(state State) (stringState string) {
 	return
 }
 
-func stripBracketsFromString(state string) (processedState string) {
+func StripBracketsFromString(state string) (processedState string) {
 	for index, row := range strings.Split(state, "\n") {
 		if strings.Contains(row, "nodes=[") {
 			replacer := strings.NewReplacer("[", "", "]", "", " ", ",")
@@ -94,16 +93,7 @@ func stripBracketsFromString(state string) (processedState string) {
 	return
 }
 
-func setConfigMapKey(kubeconfPath, configMapName, namespace, stateKey, stringState string) (err error) {
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfPath)
-	if err != nil {
-		return
-	}
-	client, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return
-	}
-
+func SetConfigMapKey(client *kubernetes.Clientset, configMapName, namespace, stateKey, stringState string) (err error) {
 	ctx := context.Background()
 	configMaps, err := client.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -121,16 +111,7 @@ func setConfigMapKey(kubeconfPath, configMapName, namespace, stateKey, stringSta
 	return
 }
 
-func returnConfigMapKey(kubeconfPath, key, configMapName, namespace string) (state State, err error) {
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfPath)
-	if err != nil {
-		return
-	}
-	client, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return
-	}
-
+func ReturnConfigMapKey(client *kubernetes.Clientset, key, configMapName, namespace string) (state State, err error) {
 	ctx := context.Background()
 	configMaps, err := client.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -139,7 +120,7 @@ func returnConfigMapKey(kubeconfPath, key, configMapName, namespace string) (sta
 
 	for _, configMap := range configMaps.Items {
 		if configMap.GetName() == configMapName {
-			state = parseConfigMapVals(configMap.Data[key])
+			state = ParseConfigMapVals(configMap.Data[key])
 		}
 	}
 	return

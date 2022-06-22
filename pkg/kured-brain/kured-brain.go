@@ -111,6 +111,21 @@ func SetConfigMapKey(client *kubernetes.Clientset, configMapName, namespace, sta
 	return
 }
 
+func ReturnStringConfigMapKey(client *kubernetes.Clientset, key, configMapName, namespace string) (state string, err error) {
+	ctx := context.Background()
+	configMaps, err := client.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return
+	}
+
+	for _, configMap := range configMaps.Items {
+		if configMap.GetName() == configMapName {
+			state = configMap.Data[key]
+		}
+	}
+	return
+}
+
 func ReturnConfigMapKey(client *kubernetes.Clientset, key, configMapName, namespace string) (state State, err error) {
 	ctx := context.Background()
 	configMaps, err := client.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})

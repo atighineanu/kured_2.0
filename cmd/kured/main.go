@@ -307,44 +307,12 @@ func buildHostCommand(pid int, command []string) []string {
 	return cmd
 }
 
-type State struct {
-	Nodes         []string
-	Value         string
-	Period        string
-	Scheduled     string
-	TimeFrame     string
-	NodeInProcess string
-}
-
-func parseKuredBrain(input string) State {
-	state := &State{}
-	for _, row := range strings.Split(input, "\n") {
-		splittedRow := strings.Split(row, "=")
-		if len(splittedRow) != 2 {
-			continue // if the input is not properly formatted - do nothing
-		} else {
-			switch splittedRow[0] {
-			case "nodes":
-				state.Nodes = append(state.Nodes, strings.Split(splittedRow[1], ",")...)
-			case "value":
-				state.Value = splittedRow[1]
-			case "period":
-				state.Period = splittedRow[1]
-			case "scheduled":
-				state.Scheduled = splittedRow[1]
-			case "timeFrame":
-				state.TimeFrame = splittedRow[1]
-			}
-		}
-	}
-	//fmt.Printf("HERE IS THE RESULT: %+v\n", state)
-	return *state
-}
-
 func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
+	if a != "" {
+		for _, b := range list {
+			if b == a {
+				return true
+			}
 		}
 	}
 	return false

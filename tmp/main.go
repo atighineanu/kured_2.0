@@ -68,7 +68,7 @@ func parseConfigMapVals(mapData string) State {
 	return *state
 }
 
-func packConfigMapVals(state State) (stringState string) {
+func PackConfigMapVals(state State) (stringState string) {
 	var tpl bytes.Buffer
 	tmpl, err := template.New("stateTempl").Parse(stateStrTemplate)
 	if err != nil {
@@ -148,14 +148,14 @@ func returnConfigMapKey(kubeconfPath, key, configMapName, namespace string) (sta
 	return
 }
 
-func rebootRequired(nodeID, kubeconfPath, configMapName, namespace, stateKey, stateVal string) (error, bool) {
+func rebootRequired(nodeID, kubeconfPath, configMapName, namespace, stateKey string) (error, bool) {
 	for i := 1; i < 5; i++ {
 		if os.Getenv(fmt.Sprintf("STATE%v", i)) != "" {
 			stateA := parseConfigMapVals(os.Getenv(fmt.Sprintf("STATE%v", i)))
 			log.Printf("HERE: %+v\n", stateA)
 			if stateA.Value == "reboot" && stateA.NodeInProcess == "" {
 				stateA.NodeInProcess = nodeID
-				err := setConfigMapKey(kubeconfPath, configMapName, namespace, stateKey, stripBracketsFromString(packConfigMapVals(stateA)))
+				err := setConfigMapKey(kubeconfPath, configMapName, namespace, stateKey, stripBracketsFromString(PackConfigMapVals(stateA)))
 				if err != nil {
 					return nil, false
 				}
@@ -171,23 +171,65 @@ func rebootRequired(nodeID, kubeconfPath, configMapName, namespace, stateKey, st
 	return nil, false
 }
 
+func removElemSlice(elem string, list []string) []string {
+	for index, val := range list {
+		if elem == val {
+			if len(list) > 1 {
+				if index < len(list)-1 {
+					list = append(list[0:index], list[index+1:]...)
+				} else {
+					list = list[0:index]
+				}
+			} else {
+				list = nil
+			}
+		}
+	}
+	return list
+}
+
 func main() {
-	state, err := returnConfigMapKey("/home/user/.kube/config", "state2", "kured-brain", "kube-system")
+	/*
+		list := []string{"kind-worker", "kind-worker2", "kind-control-plane"}
+		list = removElemSlice("kind-control-plane", list)
+		fmt.Printf("%+v\n", list)
+	*/
+	/*
+		state, err := returnConfigMapKey("/home/user/.kube/config", "state2", "kured-brain", "kube-system")
+		if err != nil {
+			log.Printf("Error: %v\n", err)
+		}
+		fmt.Printf("%+v\n", state)
+		state.Nodes = []string{"test-masters-0", "test-workers-0", "test-workers-1"}
+		strState := PackConfigMapVals(state)
+		fmt.Printf("STRSTATE: %+v\n", strState)
+		strState = stripBracketsFromString(strState)
+		fmt.Printf("STRSTATEPROCESSED: %+v\n", strState)
+		err = setConfigMapKey("/home/user/.kube/config", "kured-brain", "kube-system", "state2", strState)
+		if err != nil {
+			fmt.Printf("%v\n", err)
+		}
+		err, _ = rebootRequired("node01", "/home/user/.kube/config", "kured-brain", "kube-system", "state2")
+		if err != nil {
+			fmt.Printf("%v\n", err)
+		}
+	*/
+
+	config, err := clientcmd.BuildConfigFromFlags("", "/home/user/.kube/config")
 	if err != nil {
-		log.Printf("Error: %v\n", err)
+		return
 	}
-	fmt.Printf("%+v\n", state)
-	state.Nodes = []string{"test-masters-0", "test-workers-0", "test-workers-1"}
-	strState := packConfigMapVals(state)
-	fmt.Printf("STRSTATE: %+v\n", strState)
-	strState = stripBracketsFromString(strState)
-	fmt.Printf("STRSTATEPROCESSED: %+v\n", strState)
-	err = setConfigMapKey("/home/user/.kube/config", "kured-brain", "kube-system", "state2", strState)
+
+	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		fmt.Printf("%v\n", err)
+		log.Fatal(err)
 	}
-	err, _ = rebootRequired(state)
-	if err != nil {
-		fmt.Printf("%v\n", err)
+	node, err := client.CoreV1().Nodes().Get(context.TODO(), "kind-worker", metav1.GetOptions{})
+	fmt.Printf("%+v\n", node)
+	for _, val := range node.Status.Conditions {
+		if val.Type == "Ready" && val.Status == "True" && node.Spec.Unschedulable == false {
+			fmt.Printf("READY WAY!!!")
+		}
 	}
+
 }

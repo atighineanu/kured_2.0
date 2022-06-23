@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# optional argument handling
+if [[ "$1" == "version" ]]
+then
+    echo "1.0.0"
+    exit 0
+fi
+
+# optional argument handling
+if [[ "$1" == "config" ]]
+then
+    echo "$KUBECONFIG"
+    exit 0
+fi
+
+kured_brain="apiVersion: v1
+kind: ConfigMap
+metadata:
+#  creationTimestamp: 2017-12-27T18:36:28Z
+  name: kured-brain
+  namespace: kube-system
+#  resourceVersion: \"809965\"
+#  uid: d9d1ca5b-eb34-11e7-887b-42010a8002b8
+data:
+  state2: |-
+    nodes=${2}
+    value=reboot
+    period=once
+    scheduled=no
+    timeFrame=\"\"
+  
+  nodeInProcess: \"\""
+
+while getopts ":abc --reboot" opt; do
+  case ${opt} in
+    r | --reboot)       echo "REBOOT was triggered: brain: ${kured_brain}"
+      ;;
+    v | --version)      echo "1.0.0"
+                        exit 0
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      exit 1
+      ;;
+    :)
+      echo "Option -$OPTARG requires an argument." >&2
+      exit 1
+      ;;
+  esac
+done

@@ -332,62 +332,82 @@ func removElemSlice(elem string, list []string) []string {
 			}
 		}
 	}
-
 	return list
 }
 
-func rebootRequired(client *kubernetes.Clientset, nodeID, configMapName, namespace, stateKey string) bool {
-	stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
+func deleteInvoked(client *kubernetes.Clientset) {
+	stateB, err := kured_brain.ReturnStringConfigMapKey(client, "nodeInProcess", "kured-brain", "kube-system")
 	if err != nil {
 		log.Warnf("Something is wrong with kubectl config: %v\n", err)
-		return false
+		return
 	}
-	stateB, err := kured_brain.ReturnStringConfigMapKey(client, "state1", "kured-brain", "kube-system")
-	if err != nil {
-		log.Warnf("Something is wrong with kubectl config: %v\n", err)
-		return false
-	}
-	if stateA.Value == "reboot" && stateB == "" {
-		if stringInSlice(nodeID, stateA.Nodes) {
-			stateB = nodeID
-			stateA.Nodes = removElemSlice(nodeID, stateA.Nodes)
-		}
-		err := kured_brain.SetConfigMapKey(client, configMapName, namespace, stateKey, kured_brain.StripBracketsFromString(kured_brain.PackConfigMapVals(stateA)))
-		if err != nil {
-			log.Warnf("Something is wrong with kubectl config: %v\n", err)
-			return false
-		}
-		err = kured_brain.SetConfigMapKey(client, configMapName, namespace, "state1", stateB)
-		if err != nil {
-			log.Warnf("Something is wrong with kubectl config: %v\n", err)
-			return false
-		}
-		return true
-	} else {
-		if stateB == nodeID {
-			return true
-		}
-		if strings.Contains(stateB, "-invoked") {
-			node, err := client.CoreV1().Nodes().Get(context.TODO(), strings.Replace(stateB, "-invoked", "", 1), metav1.GetOptions{})
-			if err != nil {
-				log.Warnf("Something is wrong with kubectl config: %v\n", err)
-				return false
-			}
-			for {
-				for _, val := range node.Status.Conditions {
-					if val.Type == "Ready" && val.Status == "True" {
-						stateB = ""
-						err = kured_brain.SetConfigMapKey(client, configMapName, namespace, "state1", stateB)
-						if err != nil {
-							log.Warnf("Something is wrong with kubectl config: %v\n", err)
-							return false
-						}
-						break
+	if strings.Contains(stateB, "-invoked") {
+		for {
+			time.Sleep(5 * time.Second)
+			var brk bool
+			node, _ := client.CoreV1().Nodes().Get(context.TODO(), strings.Replace(stateB, "-invoked", "", 1), metav1.GetOptions{})
+			//if node completely offline -> err; ignoring it for now.
+			for _, val := range node.Status.Conditions {
+				if val.Type == "Ready" && val.Status == "True" && !node.Spec.Unschedulable {
+					stateB = ""
+					err = kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "nodeInProcess", stateB)
+					if err != nil {
+						log.Warnf("Something is wrong with kubectl config: %v\n", err)
+					} else {
+						brk = true
 					}
 				}
 			}
-
+			if brk {
+				break
+			}
 		}
+	}
+}
+
+func mainTriggerer(client *kubernetes.Clientset, nodeID string) {
+	for {
+		time.Sleep(5 * time.Second)
+		stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
+		if err != nil {
+			log.Warnf("Something is wrong with kubectl config: %v\n", err)
+			return
+		}
+		stateB, err := kured_brain.ReturnStringConfigMapKey(client, "nodeInProcess", "kured-brain", "kube-system")
+		if err != nil {
+			log.Warnf("Something is wrong with kubectl config: %v\n", err)
+			return
+		}
+		if stateA.Value == "reboot" && stateB == "" && stateA.Nodes != nil {
+			if stringInSlice(nodeID, stateA.Nodes) {
+				stateB = nodeID
+				stateA.Nodes = removElemSlice(nodeID, stateA.Nodes)
+				err := kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "state2", kured_brain.StripBracketsFromString(kured_brain.PackConfigMapVals(stateA)))
+				if err != nil {
+					log.Warnf("Something is wrong with kubectl config: %v\n", err)
+					return
+				}
+				err = kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "nodeInProcess", stateB)
+				if err != nil {
+					log.Warnf("Something is wrong with kubectl config: %v\n", err)
+					return
+				}
+			}
+		}
+
+		deleteInvoked(client)
+	}
+
+}
+
+func rebootRequired(client *kubernetes.Clientset, nodeID string) bool {
+	stateB, err := kured_brain.ReturnStringConfigMapKey(client, "nodeInProcess", "kured-brain", "kube-system")
+	if err != nil {
+		log.Warnf("Something is wrong with kubectl config: %v\n", err)
+		return false
+	}
+	if stateB == nodeID {
+		return true
 	}
 	return false
 }
@@ -573,7 +593,7 @@ func uncordon(client *kubernetes.Clientset, node *v1.Node) error {
 }
 
 func invokeReboot(client *kubernetes.Clientset, nodeID string, rebootCommand []string) {
-	state, err := kured_brain.ReturnStringConfigMapKey(client, "state1", "kured-brain", "kube-system")
+	state, err := kured_brain.ReturnStringConfigMapKey(client, "nodeInProcess", "kured-brain", "kube-system")
 	if err != nil {
 		log.Warnf("Something is wrong with kubernetes client: %v", err)
 		return
@@ -587,7 +607,7 @@ func invokeReboot(client *kubernetes.Clientset, nodeID string, rebootCommand []s
 		}
 		log.Infof("Running command: %s for node: %s", rebootCommand, nodeID)
 		state += "-invoked"
-		err = kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "state1", state)
+		err = kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "nodeInProcess", state)
 		if err != nil {
 			log.Warnf("Something is wrong with kubernetes client: %v", err)
 			return
@@ -601,7 +621,7 @@ func invokeReboot(client *kubernetes.Clientset, nodeID string, rebootCommand []s
 
 func maintainRebootRequiredMetric(client *kubernetes.Clientset, nodeID string, sentinelCommand []string) {
 	for {
-		if rebootRequired(client, nodeID, "kured-brain", "kube-system", "state2") {
+		if rebootRequired(client, nodeID) {
 			rebootRequiredGauge.WithLabelValues(nodeID).Set(1)
 		} else {
 			rebootRequiredGauge.WithLabelValues(nodeID).Set(0)
@@ -714,7 +734,7 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 			// And (2) check if we previously annotated the node that it was in the process of being rebooted,
 			// And finally (3) if it has that annotation, to delete it.
 			// This indicates to other node tools running on the cluster that this node may be a candidate for maintenance
-			if annotateNodes && !rebootRequired(client, nodeID, "kured-brain", "kube-system", "state2") {
+			if annotateNodes && !rebootRequired(client, nodeID) {
 				if _, ok := node.Annotations[KuredRebootInProgressAnnotation]; ok {
 					err := deleteNodeAnnotation(client, nodeID, KuredRebootInProgressAnnotation)
 					if err != nil {
@@ -733,7 +753,7 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 	preferNoScheduleTaint := taints.New(client, nodeID, preferNoScheduleTaintName, v1.TaintEffectPreferNoSchedule)
 
 	// Remove taint immediately during startup to quickly allow scheduling again.
-	if !rebootRequired(client, nodeID, "kured-brain", "kube-system", "state2") {
+	if !rebootRequired(client, nodeID) {
 		preferNoScheduleTaint.Disable()
 	}
 
@@ -752,7 +772,7 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 			continue
 		}
 
-		if !rebootRequired(client, nodeID, "kured-brain", "kube-system", "state2") {
+		if !rebootRequired(client, nodeID) {
 			log.Infof("Reboot not required")
 			preferNoScheduleTaint.Disable()
 			continue
@@ -816,6 +836,7 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 		}
 
 		invokeReboot(client, nodeID, rebootCommand)
+		//HERE
 		for {
 			log.Infof("Waiting for reboot")
 			time.Sleep(time.Minute)
@@ -901,6 +922,7 @@ func root(cmd *cobra.Command, args []string) {
 		log.Fatal(err)
 	}
 	go rebootAsRequired(client, nodeID, hostRestartCommand, hostSentinelCommand, window, lockTTL, lockReleaseDelay)
+	go mainTriggerer(client, nodeID)
 	go maintainRebootRequiredMetric(client, nodeID, hostSentinelCommand)
 
 	http.Handle("/metrics", promhttp.Handler())

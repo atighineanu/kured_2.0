@@ -95,48 +95,35 @@ func StripBracketsFromString(state string) (processedState string) {
 
 func SetConfigMapKey(client *kubernetes.Clientset, configMapName, namespace, stateKey, stringState string) (err error) {
 	ctx := context.Background()
-	configMaps, err := client.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
+	configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, configMapName, metav1.GetOptions{})
 	if err != nil {
 		return
 	}
-	for _, configMap := range configMaps.Items {
-		if configMap.GetName() == configMapName {
-			configMap.Data[stateKey] = stringState
-			_, err = client.CoreV1().ConfigMaps(namespace).Update(ctx, &configMap, metav1.UpdateOptions{})
-			if err != nil {
-				return
-			}
-		}
+
+	configMap.Data[stateKey] = stringState
+	_, err = client.CoreV1().ConfigMaps(namespace).Update(ctx, configMap, metav1.UpdateOptions{})
+	if err != nil {
+		return
 	}
 	return
 }
 
 func ReturnStringConfigMapKey(client *kubernetes.Clientset, key, configMapName, namespace string) (state string, err error) {
 	ctx := context.Background()
-	configMaps, err := client.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
+	configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, configMapName, metav1.GetOptions{})
 	if err != nil {
 		return
 	}
-
-	for _, configMap := range configMaps.Items {
-		if configMap.GetName() == configMapName {
-			state = configMap.Data[key]
-		}
-	}
+	state = configMap.Data[key]
 	return
 }
 
 func ReturnConfigMapKey(client *kubernetes.Clientset, key, configMapName, namespace string) (state State, err error) {
 	ctx := context.Background()
-	configMaps, err := client.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
+	configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, configMapName, metav1.GetOptions{})
 	if err != nil {
 		return
 	}
-
-	for _, configMap := range configMaps.Items {
-		if configMap.GetName() == configMapName {
-			state = ParseConfigMapVals(configMap.Data[key])
-		}
-	}
+	state = ParseConfigMapVals(configMap.Data[key])
 	return
 }

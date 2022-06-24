@@ -17,11 +17,8 @@ fi
 kured_brain="apiVersion: v1
 kind: ConfigMap
 metadata:
-#  creationTimestamp: 2017-12-27T18:36:28Z
   name: kured-brain
   namespace: kube-system
-#  resourceVersion: \"809965\"
-#  uid: d9d1ca5b-eb34-11e7-887b-42010a8002b8
 data:
   state2: |-
     nodes=${2}
@@ -32,9 +29,20 @@ data:
   
   nodeInProcess: \"\""
 
+SetConfMap() {
+if !( kubectl get configmaps -n kube-system | grep kured-brain ); then {
+kubectl apply -f - <<EOF
+${kured_brain}
+EOF
+}
+fi
+}
+
 while getopts ":abc --reboot" opt; do
   case ${opt} in
-    r | --reboot)       echo "REBOOT was triggered: brain: ${kured_brain}"
+    r | --reboot)       echo "REBOOT was triggered: brain: ${kured_brain}"; SetConfMap ${kured_brain}
+      ;;
+    m | --maintenance)      echo "1.0.0"
       ;;
     v | --version)      echo "1.0.0"
                         exit 0

@@ -14,7 +14,7 @@ then
     exit 0
 fi
 
-kured_brain="apiVersion: v1
+kured_brain_reboot="apiVersion: v1
 kind: ConfigMap
 metadata:
   name: kured-brain
@@ -29,10 +29,25 @@ data:
   
   nodeInProcess: \"\""
 
+kured_brain_maint="apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kured-brain
+  namespace: kube-system
+data:
+  state2: |-
+    nodes=${2}
+    value=maintenance
+    period=once
+    scheduled=no
+    timeFrame=\"\"
+  
+  nodeInProcess: \"\""
+
 SetConfMap() {
 if !( kubectl get configmaps -n kube-system | grep kured-brain ); then {
 kubectl apply -f - <<EOF
-${kured_brain}
+${kured_brain_reboot}
 EOF
 }
 fi
@@ -40,9 +55,9 @@ fi
 
 while getopts ":abc --reboot" opt; do
   case ${opt} in
-    r | --reboot)       echo "REBOOT was triggered: brain: ${kured_brain}"; SetConfMap ${kured_brain}
+    r | --reboot)       echo "REBOOT was triggered\n brain: ${kured_brain}"; SetConfMap ${kured_brain_reboot}
       ;;
-    m | --maintenance)      echo "1.0.0"
+    m | --maintenance)  echo "MAINTENANCE was triggered\n brain: ${kured_brain}"; SetConfMap ${kured_brain_maint}
       ;;
     v | --version)      echo "1.0.0"
                         exit 0

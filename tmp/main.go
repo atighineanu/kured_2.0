@@ -231,5 +231,9 @@ func main() {
 			fmt.Printf("READY WAY!!!")
 		}
 	}
-
+	confMap, err := client.CoreV1().ConfigMaps("kube-system").Get(context.TODO(), "kured-brain", metav1.GetOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%+v", confMap.Data["state2"])
 }

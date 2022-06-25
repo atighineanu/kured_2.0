@@ -8,7 +8,7 @@ metadata:
 #  uid: d9d1ca5b-eb34-11e7-887b-42010a8002b8
 data:
   state2: |-
-    nodes=${2}
+    nodes=kind-worker2,kind-worker
     value=reboot
     period=once
     scheduled=no

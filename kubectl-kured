@@ -44,20 +44,24 @@ data:
   
   nodeInProcess: \"\""
 
-SetConfMap() {
-if !( kubectl get configmaps -n kube-system | grep kured-brain ); then {
-kubectl apply -f - <<EOF
+SetConfMap1() {
+kubectl replace -f - <<EOF
 ${kured_brain_reboot}
 EOF
 }
-fi
+
+SetConfMap2() {
+kubectl replace -f - <<EOF
+${kured_brain_maint}
+EOF
 }
+
 
 while getopts ":abc --reboot" opt; do
   case ${opt} in
-    r | --reboot)       echo "REBOOT was triggered\n brain: ${kured_brain}"; SetConfMap ${kured_brain_reboot}
+    r | --reboot)       echo "REBOOT was triggered\n brain: ${kured_brain_reboot}"; SetConfMap1
       ;;
-    m | --maintenance)  echo "MAINTENANCE was triggered\n brain: ${kured_brain}"; SetConfMap ${kured_brain_maint}
+    m | --maintenance)  echo "MAINTENANCE was triggered\n brain: ${kured_brain}"; SetConfMap2
       ;;
     v | --version)      echo "1.0.0"
                         exit 0

@@ -214,26 +214,31 @@ func main() {
 			fmt.Printf("%v\n", err)
 		}
 	*/
-
-	config, err := clientcmd.BuildConfigFromFlags("", "/home/user/.kube/config")
-	if err != nil {
-		return
-	}
-
-	client, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Fatal(err)
-	}
-	node, err := client.CoreV1().Nodes().Get(context.TODO(), "kind-worker", metav1.GetOptions{})
-	fmt.Printf("%+v\n", node)
-	for _, val := range node.Status.Conditions {
-		if val.Type == "Ready" && val.Status == "True" && node.Spec.Unschedulable == false {
-			fmt.Printf("READY WAY!!!")
+	/*
+		config, err := clientcmd.BuildConfigFromFlags("", "/home/user/.kube/config")
+		if err != nil {
+			return
 		}
-	}
-	confMap, err := client.CoreV1().ConfigMaps("kube-system").Get(context.TODO(), "kured-brain", metav1.GetOptions{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("%+v", confMap.Data["state2"])
+
+		client, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			log.Fatal(err)
+		}
+		node, err := client.CoreV1().Nodes().Get(context.TODO(), "kind-worker", metav1.GetOptions{})
+		fmt.Printf("%+v\n", node)
+		for _, val := range node.Status.Conditions {
+			if val.Type == "Ready" && val.Status == "True" && node.Spec.Unschedulable == false {
+				fmt.Printf("READY WAY!!!")
+			}
+		}
+		confMap, err := client.CoreV1().ConfigMaps("kube-system").Get(context.TODO(), "kured-brain", metav1.GetOptions{})
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%+v", confMap.Data["state2"])
+	*/
+	a := "kuka"
+	tmp := a
+	a = ""
+	fmt.Printf("a: %s \t tmp: %s\n", a, tmp)
 }

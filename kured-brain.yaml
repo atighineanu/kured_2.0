@@ -9,9 +9,9 @@ metadata:
 data:
   state2: |-
     nodes=""
-    value=reboot
+    value=""
     period=once
     scheduled=no
     timeFrame=""
-  
+
   nodeInProcess: ""

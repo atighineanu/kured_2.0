@@ -346,12 +346,11 @@ func deleteInvoked(client *kubernetes.Clientset) {
 		nodeInProcess = strings.Replace(nodeInProcess, "-invoked", "", 1)
 		if nodeInProcess == os.Getenv("KURED_NODE_ID") {
 			for {
-				time.Sleep(5 * time.Second)
+				time.Sleep(3 * time.Second)
 				var brk bool
 				node, _ := client.CoreV1().Nodes().Get(context.TODO(), nodeInProcess, metav1.GetOptions{})
 				//if node completely offline -> err; ignoring it for now.
 				counter++
-
 				for _, val := range node.Status.Conditions {
 					if val.Type == "Ready" && val.Status == "True" && !node.Spec.Unschedulable {
 						tmp := nodeInProcess
@@ -377,6 +376,12 @@ func deleteInvoked(client *kubernetes.Clientset) {
 							log.Warnf("Error notifying: %v", err)
 						}
 					}
+					err = uncordon(client, node)
+					if err != nil {
+						log.Errorf("Unable to uncordon %s: %v, will continue to hold lock and retry uncordon", node.GetName(), err)
+					} else {
+						break
+					}
 				}
 				if brk {
 					break
@@ -388,16 +393,14 @@ func deleteInvoked(client *kubernetes.Clientset) {
 
 func mainTriggerer(client *kubernetes.Clientset, nodeID string) {
 	for {
-		time.Sleep(5 * time.Second)
+		time.Sleep(9579 * time.Millisecond)
 		stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
 		if err != nil {
 			log.Warnf("Something is wrong with kubectl config: %v\n", err)
-			return
 		}
 		nodeInProcess, err := kured_brain.ReturnStringConfigMapKey(client, "nodeInProcess", "kured-brain", "kube-system")
 		if err != nil {
 			log.Warnf("Something is wrong with kubectl config: %v\n", err)
-			return
 		}
 		if nodeInProcess == "" && stateA.Nodes != nil {
 			if stringInSlice(nodeID, stateA.Nodes) {
@@ -406,34 +409,39 @@ func mainTriggerer(client *kubernetes.Clientset, nodeID string) {
 				err := kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "state2", kured_brain.StripBracketsFromString(kured_brain.PackConfigMapVals(stateA)))
 				if err != nil {
 					log.Warnf("Something is wrong with kubectl config: %v\n", err)
-					return
 				}
 				err = kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "nodeInProcess", nodeInProcess)
 				if err != nil {
 					log.Warnf("Something is wrong with kubectl config: %v\n", err)
-					return
 				}
 			}
 		}
 		deleteInvoked(client)
 	}
-
 }
 
-func rebootRequired(client *kubernetes.Clientset, nodeID string) bool {
+func rebootOrMaintRequired(client *kubernetes.Clientset, nodeID, flag string) bool {
 
 	nodeInProcess, err := kured_brain.ReturnStringConfigMapKey(client, "nodeInProcess", "kured-brain", "kube-system")
 	if err != nil {
 		log.Warnf("Something is wrong with kubectl config: %v\n", err)
-		return false
 	}
+
 	stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
 	if err != nil {
 		log.Warnf("Something is wrong with kubectl config: %v\n", err)
-		return false
 	}
 
-	return nodeInProcess == nodeID && stateA.Value == "reboot"
+	switch flag {
+	case "reboot":
+		return nodeInProcess == nodeID && stateA.Value == "reboot"
+	case "maintenance":
+		log.Printf("nodeInProcess: %s  nodeID: %s  stateA.Value %s \n", nodeInProcess, nodeID, stateA.Value)
+		log.Printf("Bool return: %v \n", nodeInProcess == nodeID && stateA.Value == "maintenance")
+		return nodeInProcess == nodeID && stateA.Value == "maintenance"
+	}
+
+	return false
 }
 
 // RebootBlocker interface should be implemented by types
@@ -621,14 +629,12 @@ func invokeReboot(client *kubernetes.Clientset, nodeID string, rebootCommand []s
 	state, err := kured_brain.ReturnStringConfigMapKey(client, "nodeInProcess", "kured-brain", "kube-system")
 	if err != nil {
 		log.Warnf("Something is wrong with kubernetes client: %v", err)
-		return
 	}
 
 	if state == nodeID {
 		if notifyURL != "" {
 			if err := shoutrrr.Send(notifyURL, fmt.Sprintf(messageTemplateReboot, nodeID)); err != nil {
 				log.Warnf("Error notifying: %v", err)
-				return
 			}
 		}
 		log.Infof("Running command: %s for node: %s", rebootCommand, nodeID)
@@ -636,7 +642,6 @@ func invokeReboot(client *kubernetes.Clientset, nodeID string, rebootCommand []s
 		err = kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "nodeInProcess", state)
 		if err != nil {
 			log.Warnf("Something is wrong with kubernetes client: %v", err)
-			return
 		}
 		if err := newCommand(rebootCommand[0], rebootCommand[1:]...).Run(); err != nil {
 			log.Fatalf("Error invoking reboot command: %v", err)
@@ -647,7 +652,7 @@ func invokeReboot(client *kubernetes.Clientset, nodeID string, rebootCommand []s
 
 func maintainRebootRequiredMetric(client *kubernetes.Clientset, nodeID string, sentinelCommand []string) {
 	for {
-		if rebootRequired(client, nodeID) {
+		if rebootOrMaintRequired(client, nodeID, "reboot") || rebootOrMaintRequired(client, nodeID, "maintenance") {
 			rebootRequiredGauge.WithLabelValues(nodeID).Set(1)
 		} else {
 			rebootRequiredGauge.WithLabelValues(nodeID).Set(0)
@@ -735,19 +740,29 @@ func updateNodeLabels(client *kubernetes.Clientset, node *v1.Node, labels []stri
 	}
 }
 
-func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand []string, sentinelCommand []string, window *timewindow.TimeWindow, TTL time.Duration, releaseDelay time.Duration) {
+func maintainAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand []string, sentinelCommand []string, window *timewindow.TimeWindow, TTL time.Duration, releaseDelay time.Duration) {
+	stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
+	if err != nil {
+		log.Printf("Error getting configMap: %v", err)
+	}
+	if stateA.Value != "maintenance" {
+		return
+	}
 	lock := daemonsetlock.New(client, nodeID, dsNamespace, dsName, lockAnnotation)
-
 	nodeMeta := nodeMeta{}
 	source := rand.NewSource(time.Now().UnixNano())
 	tick := delaytick.New(source, 1*time.Minute)
+	log.Printf("until here before FOR")
 	for range tick {
+		log.Printf("until here before IF")
 		if holding(lock, &nodeMeta) {
+			log.Printf("until here after IF")
 			node, err := client.CoreV1().Nodes().Get(context.TODO(), nodeID, metav1.GetOptions{})
 			if err != nil {
 				log.Errorf("Error retrieving node object via k8s API: %v", err)
 				continue
 			}
+			log.Printf("until here point a")
 			if !nodeMeta.Unschedulable {
 				err = uncordon(client, node)
 				if err != nil {
@@ -755,12 +770,13 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 					continue
 				}
 			}
+			log.Printf("until here point b")
 			// If we're holding the lock we know we've tried, in a prior run, to reboot
 			// So (1) we want to confirm that the reboot succeeded practically ( !rebootRequired() )
 			// And (2) check if we previously annotated the node that it was in the process of being rebooted,
 			// And finally (3) if it has that annotation, to delete it.
 			// This indicates to other node tools running on the cluster that this node may be a candidate for maintenance
-			if annotateNodes && !rebootRequired(client, nodeID) {
+			if annotateNodes && !rebootOrMaintRequired(client, nodeID, "maintenance") {
 				if _, ok := node.Annotations[KuredRebootInProgressAnnotation]; ok {
 					err := deleteNodeAnnotation(client, nodeID, KuredRebootInProgressAnnotation)
 					if err != nil {
@@ -768,20 +784,16 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 					}
 				}
 			}
+			log.Printf("until here point c")
 			throttle(releaseDelay)
 			release(lock)
+			log.Printf("until here point d")
 			break
 		} else {
 			break
 		}
 	}
-
 	preferNoScheduleTaint := taints.New(client, nodeID, preferNoScheduleTaintName, v1.TaintEffectPreferNoSchedule)
-
-	// Remove taint immediately during startup to quickly allow scheduling again.
-	if !rebootRequired(client, nodeID) {
-		preferNoScheduleTaint.Disable()
-	}
 
 	// instantiate prometheus client
 	promClient, err := alerts.NewPromClient(papi.Config{Address: prometheusURL})
@@ -792,18 +804,26 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 	source = rand.NewSource(time.Now().UnixNano())
 	tick = delaytick.New(source, period)
 	for range tick {
+		stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
+		if err != nil {
+			log.Printf("Error getting configMap: %v", err)
+		}
+		if stateA.Value != "maintenance" {
+			return
+		}
 		if !window.Contains(time.Now()) {
 			// Remove taint outside the reboot time window to allow for normal operation.
 			preferNoScheduleTaint.Disable()
 			continue
 		}
 
-		if !rebootRequired(client, nodeID) {
-			log.Infof("Reboot not required")
+		if !rebootOrMaintRequired(client, nodeID, "maintenance") {
+			log.Infof("Maintenance not required")
 			preferNoScheduleTaint.Disable()
 			continue
+		} else {
+			log.Infof("Maintenance required")
 		}
-		log.Infof("Reboot required")
 
 		var blockCheckers []RebootBlocker
 		if prometheusURL != "" {
@@ -817,10 +837,29 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 			continue
 		}
 
+		type patchStringValue struct {
+			Op    string `json:"op"`
+			Path  string `json:"path"`
+			Value bool   `json:"value"`
+		}
+
+		payload := []patchStringValue{{
+			Op:    "replace",
+			Path:  "/spec/unschedulable",
+			Value: true,
+		}}
+
+		payloadBytes, _ := json.Marshal(payload)
+		_, err = client.CoreV1().Nodes().Patch(context.TODO(), nodeID, types.JSONPatchType, payloadBytes, metav1.PatchOptions{})
+		if err != nil {
+			log.Printf("Error patching k8s API: %v", err)
+		}
+
 		node, err := client.CoreV1().Nodes().Get(context.TODO(), nodeID, metav1.GetOptions{})
 		if err != nil {
 			log.Fatalf("Error retrieving node object via k8s API: %v", err)
 		}
+
 		nodeMeta.Unschedulable = node.Spec.Unschedulable
 
 		var timeNowString string
@@ -845,14 +884,196 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 			continue
 		}
 
-		err = drain(client, node)
+		if rebootDelay > 0 {
+			log.Infof("Delaying reboot for %v", rebootDelay)
+			time.Sleep(rebootDelay)
+		}
+
+		log.Printf("here before invoking")
+
+		if rebootOrMaintRequired(client, nodeID, "maintenance") {
+
+			if notifyURL != "" {
+				if err := shoutrrr.Send(notifyURL, fmt.Sprintf("Node: %s needs maintenance!!!", nodeID)); err != nil {
+					log.Warnf("Error notifying: %v", err)
+				}
+			}
+			state, err := kured_brain.ReturnStringConfigMapKey(client, "nodeInProcess", "kured-brain", "kube-system")
+			if err != nil {
+				log.Warnf("Something is wrong with kubernetes client: %v", err)
+			}
+			state += "-invoked"
+			err = kured_brain.SetConfigMapKey(client, "kured-brain", "kube-system", "nodeInProcess", state)
+			if err != nil {
+				log.Warnf("Something is wrong with kubernetes client: %v", err)
+			}
+			time.Sleep(30 * time.Second)
+			if notifyURL != "" {
+				if err := shoutrrr.Send(notifyURL, fmt.Sprintf("Node: %s Maintained!!!", nodeID)); err != nil {
+					log.Warnf("Error notifying: %v", err)
+				}
+			}
+			throttle(releaseDelay)
+			release(lock)
+		}
+
+		node, err = client.CoreV1().Nodes().Get(context.TODO(), nodeID, metav1.GetOptions{})
 		if err != nil {
-			if !forceReboot {
-				log.Errorf("Unable to cordon or drain %s: %v, will release lock and retry cordon and drain before rebooting when lock is next acquired", node.GetName(), err)
-				release(lock)
-				log.Infof("Performing a best-effort uncordon after failed cordon and drain")
-				uncordon(client, node)
+			log.Fatalf("Error retrieving node object via k8s API: %v", err)
+		}
+
+		if node.Spec.Unschedulable {
+			err = uncordon(client, node)
+			if err != nil {
+				log.Errorf("Unable to uncordon %s: %v, will continue to hold lock and retry uncordon", node.GetName(), err)
 				continue
+			}
+			continue
+		} else {
+			log.Infof("Under maintenance. Waiting...")
+			time.Sleep(time.Minute)
+		}
+	}
+}
+
+func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand []string, sentinelCommand []string, window *timewindow.TimeWindow, TTL time.Duration, releaseDelay time.Duration) {
+	stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
+	if err != nil {
+		log.Printf("Error getting configMap: %v", err)
+	}
+	if stateA.Value != "reboot" {
+		return
+	}
+	lock := daemonsetlock.New(client, nodeID, dsNamespace, dsName, lockAnnotation)
+
+	nodeMeta := nodeMeta{}
+	source := rand.NewSource(time.Now().UnixNano())
+	tick := delaytick.New(source, 1*time.Minute)
+	log.Printf("until here before FOR")
+	for range tick {
+		if holding(lock, &nodeMeta) {
+			log.Printf("until here after IF")
+			node, err := client.CoreV1().Nodes().Get(context.TODO(), nodeID, metav1.GetOptions{})
+			if err != nil {
+				log.Errorf("Error retrieving node object via k8s API: %v", err)
+				continue
+			}
+			log.Printf("until here point a")
+			if !nodeMeta.Unschedulable {
+				err = uncordon(client, node)
+				if err != nil {
+					log.Errorf("Unable to uncordon %s: %v, will continue to hold lock and retry uncordon", node.GetName(), err)
+					continue
+				}
+			}
+			log.Printf("until here point b")
+			// If we're holding the lock we know we've tried, in a prior run, to reboot
+			// So (1) we want to confirm that the reboot succeeded practically ( !rebootRequired() )
+			// And (2) check if we previously annotated the node that it was in the process of being rebooted,
+			// And finally (3) if it has that annotation, to delete it.
+			// This indicates to other node tools running on the cluster that this node may be a candidate for maintenance
+			if annotateNodes && !rebootOrMaintRequired(client, nodeID, "reboot") {
+				if _, ok := node.Annotations[KuredRebootInProgressAnnotation]; ok {
+					err := deleteNodeAnnotation(client, nodeID, KuredRebootInProgressAnnotation)
+					if err != nil {
+						continue
+					}
+				}
+			}
+			log.Printf("until here point c")
+			throttle(releaseDelay)
+			release(lock)
+			log.Printf("until here point d")
+			break
+		} else {
+			break
+		}
+	}
+	preferNoScheduleTaint := taints.New(client, nodeID, preferNoScheduleTaintName, v1.TaintEffectPreferNoSchedule)
+
+	preferNoScheduleTaint.Disable()
+
+	// instantiate prometheus client
+	promClient, err := alerts.NewPromClient(papi.Config{Address: prometheusURL})
+	if err != nil {
+		log.Fatal("Unable to create prometheus client: ", err)
+	}
+
+	source = rand.NewSource(time.Now().UnixNano())
+	tick = delaytick.New(source, period)
+	for range tick {
+		stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
+		if err != nil {
+			log.Printf("Error getting configMap: %v", err)
+		}
+		if stateA.Value != "reboot" {
+			return
+		}
+		if !window.Contains(time.Now()) {
+			// Remove taint outside the reboot time window to allow for normal operation.
+			preferNoScheduleTaint.Disable()
+			continue
+		}
+
+		if !rebootOrMaintRequired(client, nodeID, "reboot") {
+			log.Infof("Reboot not required")
+			preferNoScheduleTaint.Disable()
+			continue
+		} else {
+			log.Infof("Reboot required")
+		}
+
+		var blockCheckers []RebootBlocker
+		if prometheusURL != "" {
+			blockCheckers = append(blockCheckers, PrometheusBlockingChecker{promClient: promClient, filter: alertFilter, firingOnly: alertFiringOnly})
+		}
+		if podSelectors != nil {
+			blockCheckers = append(blockCheckers, KubernetesBlockingChecker{client: client, nodename: nodeID, filter: podSelectors})
+		}
+
+		if rebootBlocked(blockCheckers...) {
+			continue
+		}
+
+		node, err := client.CoreV1().Nodes().Get(context.TODO(), nodeID, metav1.GetOptions{})
+		if err != nil {
+			log.Fatalf("Error retrieving node object via k8s API: %v", err)
+		}
+
+		nodeMeta.Unschedulable = node.Spec.Unschedulable
+
+		var timeNowString string
+		if annotateNodes {
+			if _, ok := node.Annotations[KuredRebootInProgressAnnotation]; !ok {
+				timeNowString = time.Now().Format(time.RFC3339)
+				// Annotate this node to indicate that "I am going to be rebooted!"
+				// so that other node maintenance tools running on the cluster are aware that this node is in the process of a "state transition"
+				annotations := map[string]string{KuredRebootInProgressAnnotation: timeNowString}
+				// & annotate this node with a timestamp so that other node maintenance tools know how long it's been since this node has been marked for reboot
+				annotations[KuredMostRecentRebootNeededAnnotation] = timeNowString
+				err := addNodeAnnotations(client, nodeID, annotations)
+				if err != nil {
+					continue
+				}
+			}
+		}
+
+		if !holding(lock, &nodeMeta) && !acquire(lock, &nodeMeta, TTL) {
+			// Prefer to not schedule pods onto this node to avoid draing the same pod multiple times.
+			preferNoScheduleTaint.Enable()
+			continue
+		}
+
+		if rebootOrMaintRequired(client, nodeID, "reboot") {
+			err = drain(client, node)
+			if err != nil {
+				if !forceReboot {
+					log.Errorf("Unable to cordon or drain %s: %v, will release lock and retry cordon and drain before rebooting when lock is next acquired", node.GetName(), err)
+					release(lock)
+					log.Infof("Performing a best-effort uncordon after failed cordon and drain")
+					uncordon(client, node)
+					continue
+				}
 			}
 		}
 
@@ -861,11 +1082,32 @@ func rebootAsRequired(client *kubernetes.Clientset, nodeID string, rebootCommand
 			time.Sleep(rebootDelay)
 		}
 
-		invokeReboot(client, nodeID, rebootCommand)
+		log.Printf("here before invoking")
+		if rebootOrMaintRequired(client, nodeID, "reboot") {
+			log.Printf("here INVOKED!!!")
+			invokeReboot(client, nodeID, rebootCommand)
+		}
+
 		//HERE
 		for {
 			log.Infof("Waiting for reboot")
 			time.Sleep(time.Minute)
+		}
+	}
+}
+
+func serveNode(client *kubernetes.Clientset, nodeID string, rebootCommand []string, sentinelCommand []string, window *timewindow.TimeWindow, TTL time.Duration, releaseDelay time.Duration) {
+	for {
+		time.Sleep(3 * time.Second)
+		stateA, err := kured_brain.ReturnConfigMapKey(client, "state2", "kured-brain", "kube-system")
+		if err != nil {
+			log.Printf("Error getting configMap: %v", err)
+		}
+		switch stateA.Value {
+		case "maintenance":
+			maintainAsRequired(client, nodeID, rebootCommand, sentinelCommand, window, TTL, releaseDelay)
+		case "reboot":
+			rebootAsRequired(client, nodeID, rebootCommand, sentinelCommand, window, TTL, releaseDelay)
 		}
 	}
 }
@@ -947,7 +1189,7 @@ func root(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	go rebootAsRequired(client, nodeID, hostRestartCommand, hostSentinelCommand, window, lockTTL, lockReleaseDelay)
+	go serveNode(client, nodeID, hostRestartCommand, hostSentinelCommand, window, lockTTL, lockReleaseDelay)
 	go mainTriggerer(client, nodeID)
 	go maintainRebootRequiredMetric(client, nodeID, hostSentinelCommand)
 
